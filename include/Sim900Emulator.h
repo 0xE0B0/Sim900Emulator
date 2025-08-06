@@ -7,13 +7,6 @@
 
 const String VERSION = "1.0.0";
 
-#define WIFI_SSID     "NotYourHome"
-#define WIFI_PASSWORD "NotYourPassword"
-
-#define BROKER_ADDR IPAddress(192,168,0,17)
-#define BROKER_USERNAME     "user" // replace with your credentials
-#define BROKER_PASSWORD     "pass"
-
 // USB UART for debugging
 constexpr unsigned long MONITOR_BAUD = 115200;
 
@@ -23,6 +16,9 @@ public:
     void init();
     void loop();
 
+    bool wifiConnected = false;
+    bool mqttConnected = false;
 private:
     Sim900 sim900;
+
 };

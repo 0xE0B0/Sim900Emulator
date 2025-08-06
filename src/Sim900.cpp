@@ -2,7 +2,8 @@
 
 void Sim900::init() {
     ModemSerial.begin(MODEM_BAUD, SERIAL_8N1, MODEM_RX, MODEM_TX); // ESP32 <-> SA2700
-    Serial << "Modem serial started at " << MODEM_BAUD << " baud, rx pin: " << MODEM_RX << ", tx pin: " << MODEM_TX;
+    Serial << "Modem serial started at " << MODEM_BAUD << " baud, rx pin: " << MODEM_RX << ", tx pin: " << MODEM_TX << endl;
+    commands.push("ATZ"); // force sending startup messages
 }
 
 void Sim900::splitCommands() {
@@ -12,9 +13,9 @@ void Sim900::splitCommands() {
         return;
     // remove leading "AT+" if present, but keep the plus sign
     if (rxBuffer.startsWith("AT+")) {
-        rxBuffer = rxBuffer.substring(3);
+        rxBuffer = rxBuffer.substring(2);
     }
-    Serial << "RX: " << rxBuffer;
+    Serial << "\033[31mRX: [" << millis() << "] " << rxBuffer << "\033[0m" << endl;
     // split multiple commands by semicolon
     while (start < rxBuffer.length()) {
         int end = rxBuffer.indexOf(';', start);
@@ -31,38 +32,41 @@ void Sim900::splitCommands() {
             commands.push(cmd);
         }
     }
+    rxBuffer.clear();
 }
 
 void Sim900::sendToHost(String msg) {
     ModemSerial.print(msg + "\r\n");
-    Serial << "TX: " << msg;
+    Serial << "\033[34mTX: [" << millis() << "] " << msg << "\033[0m" << endl;
 }
 
 void Sim900::loop() {
 
-    auto startDelay = [this]() {
-        delayCount = millis() + responseDelay;
+    auto startDelay = [this](unsigned long duration=responseDelay) {
+        delayCount = millis() + duration;
         state = ModemState::WaitToSend;
     };
 
+    while (ModemSerial.available()) {
+        char c = ModemSerial.read();
+        if (c < 32 && c != '\r' && c != '\n' && c != 26) {
+            Serial << "Received control character: " << (int)c << ", ignore" << endl;
+            continue;
+        }
+        if (c == '\r')
+            continue; // ignore carriage return
+        if (receiveSMS && c == 26)  // Ctrl+Z, used to end SMS body
+            textEnd = true;
+        if (c == '\n' || textEnd) {
+            if (rxBuffer.length() > 0)
+                splitCommands();
+        } else {
+            rxBuffer += c;
+        }
+    }
+
     switch (state) {
         case ModemState::Idle:
-            if (ModemSerial.available()) {
-                rxBuffer.clear();
-                state = ModemState::ReceiveCommand;
-            }
-            // fallthrough
-        case ModemState::ReceiveCommand:
-            while (ModemSerial.available()) {
-                char c = ModemSerial.read();
-                textEnd = (c == 26); // Ctrl+Z, used to end SMS body
-                if (c == '\r' || c == '\n' || textEnd) {
-                    if (rxBuffer.length() > 0)
-                        splitCommands();
-                } else {
-                    rxBuffer += c;
-                }
-            }
             if (commands.size() > 0) {
                 state = ModemState::ProcessCommand;
             }
@@ -71,24 +75,27 @@ void Sim900::loop() {
             String cmd = commands.pop();
 
             if (receiveSMS) {
+                if (smsRxBuffer.length() != 0)
+                    smsRxBuffer += "|";  // separate SMS body parts
                 smsRxBuffer += cmd;
                 if (textEnd) {
-                    Serial << "Received SMS from host: " << smsRxBuffer;
+                    textEnd = false;
+                    Serial << "Received SMS from host: " << smsRxBuffer << endl;
                     // TODO process SMS contents
                     smsRxBuffer.clear();
-                    response.push("+CMGS: 123"); // simulate SMS sent
+                    response.push("+CMGS: 123"); // simulate SMS sent response
                     response.push("OK");
                     receiveSMS = false; // done
                 } else {
                     response.push(">"); // prompt for more SMS content
-                    startDelay();
                 }
+                startDelay();
                 return;
             }
-            Serial << "Processing command: " << cmd;
+            // process AT commands
+            Serial << "Processing command: " << cmd << endl;
 
             if ((cmd == "AT") ||
-                (cmd == "ATH") ||                // hang up
                 (cmd == "ATH") ||                // hang up
                 (cmd == "+CMGF=1") ||            // set SMS mode to text
                 (cmd == "+CNMI=3,1") ||          // enable unsolicited SMS notifications
@@ -98,17 +105,23 @@ void Sim900::loop() {
                 (cmd.startsWith("+CMGD=")) ||    // delete SMS
                 (cmd.startsWith("+CLTS=")) ||    // set SMS timestamp
                 (cmd.startsWith("+CSCLK=")) ||   // set SMS storage
+                (cmd.startsWith("+CMEE=")) ||    // set SMS error reporting
                 (cmd.startsWith("+CSDT=")) ||    // set SMS data format
                 (cmd.startsWith("+MORING=")) ||  // set SMS roaming
                 (cmd.startsWith("+CSMINS=")) ||  // set SMS memory status
                 (cmd.startsWith("+CSMP="))) {    // set SMS parameters
                     response.push("OK");
-            } else if ((cmd == "+CPOWD=1") || (cmd == "ATZ")) {
-                if (cmd == "+CPOWD=1") {
-                    // power down the modem
-                    response.push("NORMAL POWER DOWN");
-                }
+            } else if (cmd == "ATZ") {
                 // reset the modem
+                response.push("OK");
+                response.push("RDY");
+                response.push("+CSMINS: 1,1");
+                response.push("+CFUN: 1");
+                response.push("+CPIN: READY");
+                response.push("Call Ready");
+            } else if (cmd == "+CPOWD=1") {
+                // power down the modem
+                response.push("NORMAL POWER DOWN");
                 response.push("OK");
                 response.push("RDY");
                 response.push("+CSMINS: 1,1");
@@ -119,21 +132,18 @@ void Sim900::loop() {
                 // simulate SIM card ready status
                 response.push("+CPIN: READY");
                 response.push("OK");
-            } else if (cmd.startsWith("+CREG?")) {
-                // simulate network registration status
-                response.push("+CREG: 0,1");
-                response.push("OK");
             } else if (cmd == "+CCLK?") {
                 // current clock request
                 response.push("+CCLK: \"25/01/01,12:00:00+08\"");
                 response.push("OK");
             } else if (cmd == "+CSQ") {
                 // signal quality request
-                response.push("+CSQ: 25,0");
+                response.push("+CSQ: 23,0");
                 response.push("OK");
             } else if (cmd == "+CREG?") {
                 // network registration status request
                 response.push("+CREG: 0,1");
+                response.push("OK");
             } else if (cmd == "+CMGD=" + smsId) {
                 // delete SMS by ID
                 response.push("OK");
@@ -151,7 +161,7 @@ void Sim900::loop() {
                 smsRxBuffer.clear(); // clear the buffer for new SMS content
                 response.push(">");  // prompt for SMS body
             } else {
-                Serial << "Unknown command: " << cmd;
+                Serial << "Unknown command: " << cmd << endl;
                 response.push("ERROR");
             }
             startDelay();
@@ -159,7 +169,7 @@ void Sim900::loop() {
         }
         case ModemState::WaitToSend:
             // delay between sending responses
-            if (delayCount > millis()) {
+            if (millis() > delayCount) {
                 state = ModemState::SendResponse;
             }
             break;
@@ -169,6 +179,10 @@ void Sim900::loop() {
             sendToHost(resp);
             if (response.size() > 0) {
                 startDelay();
+                // if (response.at(0) != "OK")
+                //     startDelay(100);
+                // else
+                //     startDelay(10); // shorter delay for OK responses
             } else {
                 state = ModemState::Idle;
             }
