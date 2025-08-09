@@ -1,8 +1,14 @@
 #include "Sim900.h"
+#include "DebugInterface.h"
+
+static inline Print& beginl(Print &stream) {
+    static constexpr const char name[] = "SIM900";
+    return beginl<name>(stream);
+}
 
 void Sim900::init() {
     ModemSerial.begin(MODEM_BAUD, SERIAL_8N1, MODEM_RX, MODEM_TX); // ESP32 <-> SA2700
-    Serial << "Modem serial started at " << MODEM_BAUD << " baud, rx pin: " << MODEM_RX << ", tx pin: " << MODEM_TX << endl;
+    Serial << beginl << "Modem serial started at " << MODEM_BAUD << " baud, rx pin: " << MODEM_RX << ", tx pin: " << MODEM_TX << DebugInterface::endl;
     commands.push("ATZ"); // force sending startup messages
 }
 
@@ -15,7 +21,7 @@ void Sim900::splitCommands() {
     if (rxBuffer.startsWith("AT+")) {
         rxBuffer = rxBuffer.substring(2);
     }
-    Serial << "\033[31mRX: [" << millis() << "] " << rxBuffer << "\033[0m" << endl;
+    Serial << beginl << blue << "RX: " << rxBuffer << DebugInterface::endl;
     // split multiple commands by semicolon
     while (start < rxBuffer.length()) {
         int end = rxBuffer.indexOf(';', start);
@@ -29,7 +35,8 @@ void Sim900::splitCommands() {
         }
         cmd.trim();
         if (cmd.length() > 0) {
-            commands.push(cmd);
+            if (!commands.push(cmd))
+                Serial << beginl << "Command buffer full, dropping: " << cmd << DebugInterface::endl;
         }
     }
     rxBuffer.clear();
@@ -37,7 +44,7 @@ void Sim900::splitCommands() {
 
 void Sim900::sendToHost(String msg) {
     ModemSerial.print(msg + "\r\n");
-    Serial << "\033[34mTX: [" << millis() << "] " << msg << "\033[0m" << endl;
+    Serial << beginl << cyan << "TX: " << msg << DebugInterface::endl;
 }
 
 void Sim900::loop() {
@@ -50,13 +57,13 @@ void Sim900::loop() {
     while (ModemSerial.available()) {
         char c = ModemSerial.read();
         if (c < 32 && c != '\r' && c != '\n' && c != 26) {
-            Serial << "Received control character: " << (int)c << ", ignore" << endl;
+            Serial << beginl << red << "Received control character: " << (int)c << ", ignore" << DebugInterface::endl;
             continue;
         }
         if (c == '\r')
             continue; // ignore carriage return
-        if (receiveSMS && c == 26)  // Ctrl+Z, used to end SMS body
-            textEnd = true;
+        if (receiveSMS && c == 26)
+            textEnd = true;  // Ctrl+Z, used to end SMS body
         if (c == '\n' || textEnd) {
             if (rxBuffer.length() > 0)
                 splitCommands();
@@ -80,8 +87,10 @@ void Sim900::loop() {
                 smsRxBuffer += cmd;
                 if (textEnd) {
                     textEnd = false;
-                    Serial << "Received SMS from host: " << smsRxBuffer << endl;
-                    // TODO process SMS contents
+                    Serial << beginl << "Received SMS from host: " << smsRxBuffer << DebugInterface::endl;
+                    if (!msgRxBuffer.push(smsRxBuffer)) { // store the received SMS
+                        Serial << beginl << red << "Message buffer full, dropping: " << smsRxBuffer << DebugInterface::endl;
+                    }
                     smsRxBuffer.clear();
                     response.push("+CMGS: 123"); // simulate SMS sent response
                     response.push("OK");
@@ -93,23 +102,23 @@ void Sim900::loop() {
                 return;
             }
             // process AT commands
-            Serial << "Processing command: " << cmd << endl;
+            Serial << beginl << yellow << "Processing command: " << cmd << DebugInterface::endl;
 
             if ((cmd == "AT") ||
-                (cmd == "ATH") ||                // hang up
-                (cmd == "+CMGF=1") ||            // set SMS mode to text
-                (cmd == "+CNMI=3,1") ||          // enable unsolicited SMS notifications
-                (cmd == "+CMGDA=\"DEL ALL\"") || // delete all messages                
-                (cmd.startsWith("+IPR=")) ||     // set baud rate
-                (cmd.startsWith("+CSCS=")) ||    // set character set
-                (cmd.startsWith("+CMGD=")) ||    // delete SMS
-                (cmd.startsWith("+CLTS=")) ||    // set SMS timestamp
-                (cmd.startsWith("+CSCLK=")) ||   // set SMS storage
-                (cmd.startsWith("+CMEE=")) ||    // set SMS error reporting
-                (cmd.startsWith("+CSDT=")) ||    // set SMS data format
-                (cmd.startsWith("+MORING=")) ||  // set SMS roaming
-                (cmd.startsWith("+CSMINS=")) ||  // set SMS memory status
-                (cmd.startsWith("+CSMP="))) {    // set SMS parameters
+                (cmd == "ATH") ||                 // hang up
+                (cmd == "+CMGF=1") ||             // set SMS mode to text
+                (cmd == "+CNMI=3,1") ||           // enable unsolicited SMS notifications
+                (cmd == "+CMGDA=\"DEL ALL\"") ||  // delete all messages                
+                (cmd.startsWith("+IPR="))     ||  // set baud rate
+                (cmd.startsWith("+CSCS="))    ||  // set character set
+                (cmd.startsWith("+CMGD="))    ||  // delete SMS
+                (cmd.startsWith("+CLTS="))    ||  // set SMS timestamp
+                (cmd.startsWith("+CSCLK="))   ||  // set SMS storage
+                (cmd.startsWith("+CMEE="))    ||  // set SMS error reporting
+                (cmd.startsWith("+CSDT="))    ||  // set SMS data format
+                (cmd.startsWith("+MORING="))  ||  // set SMS roaming
+                (cmd.startsWith("+CSMINS="))  ||  // set SMS memory status
+                (cmd.startsWith("+CSMP="))) {     // set SMS parameters
                     response.push("OK");
             } else if (cmd == "ATZ") {
                 // reset the modem
@@ -161,7 +170,7 @@ void Sim900::loop() {
                 smsRxBuffer.clear(); // clear the buffer for new SMS content
                 response.push(">");  // prompt for SMS body
             } else {
-                Serial << "Unknown command: " << cmd << endl;
+                Serial << beginl << red << "Unknown command: " << cmd << DebugInterface::endl;
                 response.push("ERROR");
             }
             startDelay();
@@ -179,10 +188,6 @@ void Sim900::loop() {
             sendToHost(resp);
             if (response.size() > 0) {
                 startDelay();
-                // if (response.at(0) != "OK")
-                //     startDelay(100);
-                // else
-                //     startDelay(10); // shorter delay for OK responses
             } else {
                 state = ModemState::Idle;
             }

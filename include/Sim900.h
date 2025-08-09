@@ -13,6 +13,17 @@ public:
     void splitCommands();
     void sendToHost(String msg);
 
+    inline bool messageAvailable() {
+        return msgRxBuffer.size() > 0;
+    }
+    
+    inline String getMessage() {
+        if (messageAvailable()) {
+            return msgRxBuffer.pop();
+        }
+        return "";
+    }
+
 private:
     // Alarm System UART
     static constexpr int MODEM_TX = 16;
@@ -31,9 +42,12 @@ private:
     String rxBuffer = "";
     FIFObuf<String> commands = FIFObuf<String>(16); // buffer for commands received from the host
     FIFObuf<String> response = FIFObuf<String>(16); // buffer for responses to be sent to the host
+    // sms processing buffers
     String smsNumber = "";
-    String smsRxBuffer = ""; // SMS modem to host
-    String smsTxBuffer = ""; // SMS host to modem
+    String smsRxBuffer = ""; // SMS host to modem
+    String smsTxBuffer = ""; // SMS modem to host
+    FIFObuf<String> msgRxBuffer = FIFObuf<String>(16);  // buffer for received SMS messages
+    FIFObuf<String> msgTxBuffer = FIFObuf<String>(16);  // buffer for transmitted SMS messages
 
     bool receiveSMS = false; // true if the modem is waiting for an SMS body
     bool textEnd = false;    // true if the last character was a text end (Ctrl+Z)
