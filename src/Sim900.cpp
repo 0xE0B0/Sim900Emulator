@@ -1,6 +1,7 @@
 #include "Sim900.h"
 #include "DebugInterface.h"
 
+// debug output module identifier
 static inline Print& beginl(Print &stream) {
     static constexpr const char name[] = "SIM900";
     return beginl<name>(stream);
@@ -8,7 +9,7 @@ static inline Print& beginl(Print &stream) {
 
 void Sim900::init() {
     ModemSerial.begin(MODEM_BAUD, SERIAL_8N1, MODEM_RX, MODEM_TX); // ESP32 <-> SA2700
-    Serial << beginl << "Modem serial started at " << MODEM_BAUD << " baud, rx pin: " << MODEM_RX << ", tx pin: " << MODEM_TX << DebugInterface::endl;
+    Serial << beginl << "Modem serial started at " << MODEM_BAUD << " baud, rx pin: " << MODEM_RX << ", tx pin: " << MODEM_TX << DI::endl;
     commands.push("ATZ"); // force sending startup messages
 }
 
@@ -21,7 +22,7 @@ void Sim900::splitCommands() {
     if (rxBuffer.startsWith("AT+")) {
         rxBuffer = rxBuffer.substring(2);
     }
-    Serial << beginl << blue << "RX: " << rxBuffer << DebugInterface::endl;
+    Serial << beginl << blue << "RX: " << rxBuffer << DI::endl;
     // split multiple commands by semicolon
     while (start < rxBuffer.length()) {
         int end = rxBuffer.indexOf(';', start);
@@ -36,7 +37,7 @@ void Sim900::splitCommands() {
         cmd.trim();
         if (cmd.length() > 0) {
             if (!commands.push(cmd))
-                Serial << beginl << "Command buffer full, dropping: " << cmd << DebugInterface::endl;
+                Serial << beginl << "Command buffer full, dropping: " << cmd << DI::endl;
         }
     }
     rxBuffer.clear();
@@ -44,7 +45,7 @@ void Sim900::splitCommands() {
 
 void Sim900::sendToHost(String msg) {
     ModemSerial.print(msg + "\r\n");
-    Serial << beginl << cyan << "TX: " << msg << DebugInterface::endl;
+    Serial << beginl << cyan << "TX: " << msg << DI::endl;
 }
 
 void Sim900::loop() {
@@ -57,7 +58,7 @@ void Sim900::loop() {
     while (ModemSerial.available()) {
         char c = ModemSerial.read();
         if (c < 32 && c != '\r' && c != '\n' && c != 26) {
-            Serial << beginl << red << "Received control character: " << (int)c << ", ignore" << DebugInterface::endl;
+            Serial << beginl << red << "Received control character: " << (int)c << ", ignore" << DI::endl;
             continue;
         }
         if (c == '\r')
@@ -87,9 +88,9 @@ void Sim900::loop() {
                 smsRxBuffer += cmd;
                 if (textEnd) {
                     textEnd = false;
-                    Serial << beginl << "Received SMS from host: " << smsRxBuffer << DebugInterface::endl;
+                    Serial << beginl << "Received SMS from host: " << smsRxBuffer << DI::endl;
                     if (!msgRxBuffer.push(smsRxBuffer)) { // store the received SMS
-                        Serial << beginl << red << "Message buffer full, dropping: " << smsRxBuffer << DebugInterface::endl;
+                        Serial << beginl << red << "Message buffer full, dropping: " << smsRxBuffer << DI::endl;
                     }
                     smsRxBuffer.clear();
                     response.push("+CMGS: 123"); // simulate SMS sent response
@@ -102,7 +103,7 @@ void Sim900::loop() {
                 return;
             }
             // process AT commands
-            Serial << beginl << yellow << "Processing command: " << cmd << DebugInterface::endl;
+            Serial << beginl << yellow << "Processing command: " << cmd << DI::endl;
 
             if ((cmd == "AT") ||
                 (cmd == "ATH") ||                 // hang up
@@ -170,7 +171,7 @@ void Sim900::loop() {
                 smsRxBuffer.clear(); // clear the buffer for new SMS content
                 response.push(">");  // prompt for SMS body
             } else {
-                Serial << beginl << red << "Unknown command: " << cmd << DebugInterface::endl;
+                Serial << beginl << red << "Unknown command: " << cmd << DI::endl;
                 response.push("ERROR");
             }
             startDelay();

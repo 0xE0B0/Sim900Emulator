@@ -117,7 +117,7 @@ inline Print& beginl(Print &stream) {
 //     return beginl<name>(stream);
 // }
 
-struct DebugInterface {
+struct DI {
     static inline Print& endl(Print &stream) {
         if constexpr (useAnsiColor)
             stream << EscapeSequence::reset();
@@ -125,10 +125,3 @@ struct DebugInterface {
         return stream;
     }
 };
-
-inline Print& endl(Print &stream) {
-    if constexpr(useAnsiColor)
-        stream << EscapeSequence::reset();
-    stream << "\n";
-    return stream;
-}
