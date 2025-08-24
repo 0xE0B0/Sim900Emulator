@@ -97,6 +97,7 @@ void Emulator::init() {
 
 void Emulator::loop() {
     sim900.loop();
+    bool sendUpdate = false;
     if (sim900.messageAvailable()) {
         String msg = sim900.getMessage();
         Serial << beginl << blue << "MQTT message: " << msg << DI::endl;
@@ -156,8 +157,16 @@ void Emulator::loop() {
             Serial << beginl << green << "MQTT Sources: " << sourcesList << DI::endl;
         }
         if (statusValue.length() > 0) {
-            status.setValue(statusValue.c_str());
-            Serial << beginl << green << "MQTT Status: " << statusValue << DI::endl;
+            currentStatus = statusValue;
+            sendUpdate = true;
         }
+    }
+    if ((millis() - lastUpdate) > MQTT_KEEP_ALIVE) {
+        lastUpdate = millis();
+        sendUpdate = true;
+    }
+    if (sendUpdate) {
+        status.setValue(currentStatus.c_str());
+        Serial << beginl << green << "MQTT Status: " << currentStatus << DI::endl;
     }
 }
