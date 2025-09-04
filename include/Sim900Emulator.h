@@ -4,9 +4,10 @@
 #include <HardwareSerial.h>
 #include <PrintStream.h>
 #include "Sim900.h"
+#include "FixedString.h"
 #include <ArduinoHA.h>
 
-const String VERSION = "1.0.2";
+static constexpr char VERSION[] = "1.0.3";
 
 // USB UART for debugging
 constexpr unsigned long MONITOR_BAUD = 115200;
@@ -22,6 +23,6 @@ public:
 
 private:
     Sim900 sim900;
-    String currentStatus = "N/A";
+    FixedString128 currentStatus = FixedString128("N/A");
     unsigned long lastUpdate = 0;
 };

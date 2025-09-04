@@ -52,9 +52,8 @@ void setup() {
     byte mac[6];
     WiFi.macAddress(mac);
     device.setUniqueId(mac, sizeof(mac));
-    
     device.setName("Sim900Emulator");
-    device.setSoftwareVersion(VERSION.c_str());
+    device.setSoftwareVersion(VERSION);
     device.setManufacturer("NotYourHome");
     device.setAvailability(true);
     device.enableSharedAvailability();
@@ -62,6 +61,11 @@ void setup() {
 
     mqtt.begin(BROKER_ADDR, BROKER_USERNAME, BROKER_PASSWORD);
     Serial << beginl << "MQTT connecting... " << DI::endl;
+
+    // initialize HA sensor metadata/value after MQTT/HA are initialized to avoid
+    // dereferencing uninitialized internals inside the HASensor implementation
+    message.setValue("N/A");
+    message.setName("Message");
 }
 
 void loop() {
@@ -99,65 +103,93 @@ void Emulator::loop() {
     sim900.loop();
     bool sendUpdate = false;
     if (sim900.messageAvailable()) {
-        String msg = sim900.getMessage();
+    FixedString128 msg;
+    if (!sim900.getMessage(msg)) {
+        return;
+    }
         Serial << beginl << blue << "MQTT message: " << msg << DI::endl;
         message.setValue(msg.c_str());
         // parse message as tuples: source|status|source|status|...
         // e.g. "FB Handsender|Scharf"
         //      "BW Flur|Einbruch"
         //      "BW Wohnzimmer|Einbruch|BW Kueche|Einbruch"
-        std::vector<String> sources;
-        String statusValue;
-        int start = 0;
+    std::vector<FixedString128> sources;
+    FixedString128 statusValue;
+        const char* s = msg.c_str();
+        int len = msg.length();
+        int pos = 0;
         int srcIdx = 0;
-        while (start < msg.length()) {
-            // get source
-            int end = msg.indexOf('|', start);
-            String sourcePart;
-            if (end == -1) {
-                break;
-            } else {
-                sourcePart = msg.substring(start, end);
-                start = end + 1;
-            }
-            sourcePart.trim();
-            // get status
-            end = msg.indexOf('|', start);
-            String statusPart;
-            if (end == -1) {
-                statusPart = msg.substring(start);
-                start = msg.length();
-            } else {
-                statusPart = msg.substring(start, end);
-                start = end + 1;
-            }
-            statusPart.trim();
+        while (pos < len) {
+            // parse source
+            int start = pos;
+            while (pos < len && s[pos] != '|') ++pos;
+            if (pos >= len) break; // no status follows
+            int srcEnd = pos - 1;
+            // trim source
+            while (start <= srcEnd && isspace((unsigned char)s[start])) ++start;
+            while (srcEnd >= start && isspace((unsigned char)s[srcEnd])) --srcEnd;
+            int srcLen = srcEnd >= start ? (srcEnd - start + 1) : 0;
+            ++pos; // skip '|'
+            // parse status
+            int statStart = pos;
+            while (pos < len && s[pos] != '|') ++pos;
+            int statEnd = pos - 1;
+            // trim status
+            while (statStart <= statEnd && isspace((unsigned char)s[statStart])) ++statStart;
+            while (statEnd >= statStart && isspace((unsigned char)s[statEnd])) --statEnd;
+            int statLen = statEnd >= statStart ? (statEnd - statStart + 1) : 0;
 
-            if (sourcePart.length() > 0 && statusPart.length() > 0) {
-                sources.push_back(sourcePart);
+            if (srcLen > 0 && statLen > 0) {
+                FixedString128 fs;
+                int copyLen = srcLen;
+                if (copyLen >= (int)sizeof(fs.buf)) copyLen = sizeof(fs.buf) - 1;
+                memcpy(fs.buf, s + start, copyLen);
+                fs.buf[copyLen] = '\0';
+                fs.len = copyLen;
+                sources.push_back(fs);
+
+                FixedString128 statusBuf;
+                int copyStat = statLen;
+                if (copyStat > 127) copyStat = 127;
+                memcpy(statusBuf.buf, s + statStart, copyStat);
+                statusBuf.buf[copyStat] = '\0';
+                statusBuf.len = copyStat;
+
                 if (srcIdx == 0) {
-                    statusValue = statusPart;
-                } else if (statusValue != statusPart) {
-                    Serial << beginl << red << "Inconsistent status for source: " << sourcePart << ", expected: " << statusValue << ", got: " << statusPart << DI::endl;
+                    statusValue.set(statusBuf);
+                } else if (strcmp(statusValue.c_str(), statusBuf) != 0) {
+                    // log inconsistency with original strings for clarity
+                    FixedString128 tmpSrc;
+                    int tl = copyLen < 128 ? copyLen : 128;
+                    memcpy(tmpSrc.buf, s + start, tl);
+                    tmpSrc.buf[tl] = '\0';
+                    tmpSrc.len = tl;
+                    Serial << beginl << red << "Inconsistent status for source: " << tmpSrc.c_str() << ", expected: " << statusValue.c_str() << ", got: " << statusBuf.c_str() << DI::endl;
                 }
-                Serial << beginl << "Parsed: [" << sourcePart << "] [" << statusPart << "]" << DI::endl;
+                // log parsed pair
+                FixedString128 tmpSrcLog;
+                int l = copyLen < 128 ? copyLen : 128;
+                memcpy(tmpSrcLog.buf, s + start, l);
+                tmpSrcLog.buf[l] = '\0';
+                tmpSrcLog.len = l;
+                Serial << beginl << "Parsed: [" << tmpSrcLog.c_str() << "] [" << statusBuf.c_str() << "]" << DI::endl;
             }
-            srcIdx++;
+            ++srcIdx;
         }
         // note: observe order, set source first, then status,
         // to allow HA to read up-to-date sources when triggering on status change
         if (!sources.empty()) {
-            // join sources with comma
-            String sourcesList;
+            // join sources with comma into a FixedString128
+            FixedString128 sourcesList;
             for (size_t i = 0; i < sources.size(); ++i) {
-                if (i > 0) sourcesList += ", ";
-                sourcesList += sources[i];
+                if (i > 0) sourcesList.append(", ");
+                sourcesList.append(sources[i].c_str());
             }
             source.setValue(sourcesList.c_str());
-            Serial << beginl << green << "MQTT Sources: " << sourcesList << DI::endl;
+            Serial << beginl << green << "MQTT Sources: " << sourcesList.c_str() << DI::endl;
         }
         if (statusValue.length() > 0) {
-            currentStatus = statusValue;
+            currentStatus.set(statusValue.c_str());
             sendUpdate = true;
         }
     }
