@@ -27,6 +27,10 @@ public:
         return false;
     }
 
+    inline bool sendMessage(const FixedString128 &msg) {
+        return msgTxBuffer.push(msg);
+    }
+
 private:
     // Alarm System UART
     static constexpr int MODEM_TX = 16;
@@ -36,9 +40,6 @@ private:
     static constexpr int responseDelay = 100; // delay in milliseconds before sending a response
     HardwareSerial ModemSerial{1};
 
-    // note: pin and key must be configured in the SA2700 alarm system
-    static constexpr char smsPin[] = "1207";
-    static constexpr char smsKey[] = "PROG";
     static constexpr char smsId[] = "1";
     static constexpr char phoneNumber[] = "+4915773807779";
 

@@ -19,6 +19,21 @@ HASensor status("alarmcontrol_status");
 HASensor source("alarmcontrol_source");
 HASensor message("alarmcontrol_message");
 
+HAButton updateCmd("alarmcontrol_update");
+HAButton armCmd("alarmcontrol_arm");
+HAButton disarmCmd("alarmcontrol_disarm");
+
+// button command callback
+static void onButtonCommand(HAButton* sender) {
+    if (sender == &updateCmd) {
+        emulator.sendCommand(Emulator::Command::GetStatus);
+    } else if (sender == &armCmd) {
+        emulator.sendCommand(Emulator::Command::ArmAway);
+    } else if (sender == &disarmCmd) {
+        emulator.sendCommand(Emulator::Command::Disarm);
+    }
+}
+
 void setup() {
     Serial.begin(MONITOR_BAUD);
     Serial << beginl << "Emulator v" << VERSION << " started" << DI::endl;
@@ -61,11 +76,6 @@ void setup() {
 
     mqtt.begin(BROKER_ADDR, BROKER_USERNAME, BROKER_PASSWORD);
     Serial << beginl << "MQTT connecting... " << DI::endl;
-
-    // initialize HA sensor metadata/value after MQTT/HA are initialized to avoid
-    // dereferencing uninitialized internals inside the HASensor implementation
-    message.setValue("N/A");
-    message.setName("Message");
 }
 
 void loop() {
@@ -92,29 +102,84 @@ void Emulator::init() {
     status.setName("Status");
     source.setName("Source");
     message.setName("Message");
+    updateCmd.setName("Update Status");
+    armCmd.setName("Arm");
+    disarmCmd.setName("Disarm");
 
     status.setIcon("mdi:alarm-panel");
     source.setIcon("mdi:source-branch");
     message.setIcon("mdi:message-text");
+    updateCmd.setIcon("mdi:refresh");
+    armCmd.setIcon("mdi:shield-lock");
+    disarmCmd.setIcon("mdi:shield-lock-open");
 
+    updateCmd.onCommand(onButtonCommand);
+    armCmd.onCommand(onButtonCommand);
+    disarmCmd.onCommand(onButtonCommand);
+
+    // request initial status
+    sendCommand(Command::GetStatus);
+
+}
+
+bool Emulator::sendCommand(const Command cmd) {
+    FixedString128 fs;
+        fs = smsKey;
+        fs += " ";
+        fs += smsPin;
+        fs += " ";
+    switch (cmd) {
+        case Command::GetStatus:
+            fs += "MOD?:";
+            break;
+        case Command::ArmAway:
+            fs += "MODE:A";
+            break;
+        case Command::ArmHome:
+            fs += "MODE:H";
+            break;
+        case Command::Disarm:
+            fs += "MODE:D";
+            break;
+        default:
+            return false;
+    }
+    return sim900.sendMessage(fs);
+}
+
+Emulator::CommandState Emulator::parseCommandResponse(const FixedString128 &msg) {
+    char *modPos = strstr(msg.c_str(), "MOD?:");
+    if (modPos == nullptr) {
+        modPos = strstr(msg.c_str(), "MODE:");
+    }
+    if (modPos == nullptr) {
+        return CommandState::Unknown;
+    }
+    modPos += 5; // skip "MOD?:" or "MODE:"
+    if (*modPos == 'A' && *(modPos + 1) == '\0') {
+        return CommandState::Armed;
+    } else if (*modPos == 'H' && *(modPos + 1) == '\0') {
+        return CommandState::Armed;
+    } else if (*modPos == 'D' && *(modPos + 1) == '\0') {
+        return CommandState::Disarmed;
+    }
+    return CommandState::Unknown;
 }
 
 void Emulator::loop() {
     sim900.loop();
     bool sendUpdate = false;
-    if (sim900.messageAvailable()) {
     FixedString128 msg;
-    if (!sim900.getMessage(msg)) {
-        return;
-    }
+    if (sim900.getMessage(msg)) {
         Serial << beginl << blue << "MQTT message: " << msg << DI::endl;
         message.setValue(msg.c_str());
         // parse message as tuples: source|status|source|status|...
         // e.g. "FB Handsender|Scharf"
         //      "BW Flur|Einbruch"
         //      "BW Wohnzimmer|Einbruch|BW Kueche|Einbruch"
-    std::vector<FixedString128> sources;
-    FixedString128 statusValue;
+        //      "Confirmed|PROG 1207 MODE?:A"  (response to command)
+        std::vector<FixedString128> sources;
+        FixedString128 statusValue;
         const char* s = msg.c_str();
         int len = msg.length();
         int pos = 0;
@@ -179,6 +244,24 @@ void Emulator::loop() {
         // note: observe order, set source first, then status,
         // to allow HA to read up-to-date sources when triggering on status change
         if (!sources.empty()) {
+            // check if this is a response to a previous command
+            if (sources.size() == 1 && sources[0].startsWith("Confirmed")) {
+                sources.clear();
+                sources.push_back(FixedString128("Kommandobestaetigung"));
+                auto cmdState = parseCommandResponse(statusValue);
+                Serial << beginl << "Command response, state: " << (int)cmdState << DI::endl;
+                switch(cmdState) {
+                    case CommandState::Armed:
+                        statusValue.set("Scharf");
+                        break;
+                    case CommandState::Disarmed:
+                        statusValue.set("Unscharf");
+                        break;
+                    case CommandState::Unknown:
+                        statusValue.set("Unbekannt");
+                        break;
+                }
+            }
             // join sources with comma into a FixedString128
             FixedString128 sourcesList;
             for (size_t i = 0; i < sources.size(); ++i) {

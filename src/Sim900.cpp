@@ -44,7 +44,7 @@ void Sim900::splitCommands() {
             cfs.buf[copyLen] = '\0';
             cfs.len = copyLen;
             if (!commands.push(cfs)) {
-                Serial << beginl << "Command buffer full, dropping: " << cfs.c_str() << DI::endl;
+                Serial << beginl << red << "Command buffer full, dropping: " << cfs.c_str() << DI::endl;
             }
         }
         start = (end < len && s[end] == ';') ? end + 1 : end;
@@ -86,7 +86,19 @@ void Sim900::loop() {
     switch (state) {
         case ModemState::Idle:
             if (commands.size() > 0) {
+                // check if there are commands to be processed
                 state = ModemState::ProcessCommand;
+            } else if (msgTxBuffer.size() > 0) {
+                // check if there are SMS messages to be sent to the host
+                FixedString128 fs;
+                fs = msgTxBuffer.pop();
+                smsTxBuffer = fs;  // set SMS body to be sent
+                // send unsolicited SMS indication to the host
+                snprintf(fs.buf, sizeof(fs.buf), "+CMTI: \"SM\",%s", smsId);
+                fs.len = strnlen(fs.buf, sizeof(fs.buf)-1);
+                response.push(fs);
+                Serial << beginl << green << "Indicate SMS to host, id: " << smsId << DI::endl;
+                startDelay();   
             }
             break;
         case ModemState::ProcessCommand: {
@@ -105,7 +117,7 @@ void Sim900::loop() {
                     FixedString128 fs(smsRxBuffer);
                     if (!msgRxBuffer.push(fs)) { // store the received SMS
                         Serial << beginl << red << "Message buffer full, dropping: " << smsRxBuffer << DI::endl;
-                    }
+                    }      
                     smsRxBuffer.clear();
                     response.push(FixedString128("+CMGS: 123")); // simulate SMS sent response
                     response.push(FixedString128("OK"));
@@ -168,19 +180,20 @@ void Sim900::loop() {
                 response.push(FixedString128("+CREG: 0,1"));
                 response.push(FixedString128("OK"));
             } else if (strncmp(ccmd, "+CMGR=", 6) == 0 && strcmp(ccmd + 6, smsId) == 0) {
+                // read SMS message by index
+                if (smsTxBuffer.length() > 0) {
                     FixedString160 tmp;
                     snprintf(tmp.buf, sizeof(tmp.buf), "+CMGR: \"REC UNREAD\",\"%s\",,\"25/01/01,12:00:00+08\"", phoneNumber);
                     tmp.len = strnlen(tmp.buf, sizeof(tmp.buf)-1);
                     response.push(FixedString128(tmp.c_str()));
-                // send the SMS content
-                if (smsTxBuffer.length() > 0) {
+                    // send the SMS content
                     FixedString128 fs(smsTxBuffer);
-                    msgTxBuffer.push(fs);
                     response.push(FixedString128(smsTxBuffer));
+                    response.push(FixedString128("OK"));
+                    smsTxBuffer.clear(); // clear the SMS content after sending
                 } else {
-                    response.push(FixedString128(""));
+                    response.push(FixedString128("ERROR")); // no SMS at this index, strange ...
                 }
-                smsTxBuffer.clear(); // clear the SMS content after deletion
             } else if (strncmp(ccmd, "+CMGS=", 6) == 0) {
                 // receive SMS from host
                 // find first and last quote

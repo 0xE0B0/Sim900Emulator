@@ -38,6 +38,7 @@ struct FixedString {
     operator const char*() const { return buf; }
     void reserve(size_t) {}  // no-op for fixed buffer
     size_t length() const { return len; }
+    size_t capacity() const { return N - 1; }
     bool startsWith(const char* s) const {
         if (!s) return false;
         return strncmp(buf, s, strlen(s)) == 0;
