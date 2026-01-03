@@ -1,14 +1,25 @@
-# Sim 900 Emulator
-This is an ESP32 project to interface a Blaupunkt SA2700 Alarmsystem
+# Sim900 Emulator
+This ESP32 firmware emulates a SIM900 GSM modem for legacy Blaupunkt alarm systems (e.g. SA2700, SA2500) and exposes alarm events via MQTT for Home Assistant integration.
 
-Sim900Emulator is an ESP32-based emulator that simulates a SIM900-like alarm system modem (e.g. Blaupunkt SA2700 or SA2500) and publishes status/messages to MQTT for Home Assistant integration.
+Many of these alarm systems depend on a SIM900 modem using 2G, which is no longer supported by modern SIM cards and cellular networks in many regions. As a result, the original functionality is unusable, despite the alarm system hardware (door and motion sensors, alarm logic) remaining fully functional.
 
-This repository contains firmware that runs on an ESP32, emulates modem responses over a hardware UART, and exposes sensors via MQTT discovery for easy use with Home Assistant.
+This project replaces the cellular modem with a local ESP32-based emulator, preserving the alarm system and integrating it into home automation setups.
+
+## Overview
+
+Sim900Emulator is an ESP32-based SIM900 modem emulator that:
+- Communicates with the alarm system over a hardware UART
+- Responds with SIM900-compatible AT command behavior
+- Publishes alarm states, events, and messages to MQTT
+- Uses Home Assistant MQTT Discovery for zero-config integration
 
 ## Features
 
-- Target: ESP32 (uses UART1 for the alarm-system interface)
-- MQTT discovery compatible with Home Assistant
+- Target platform: ESP32
+- Uses UART1 for the alarm-system interface
+- SIM900-compatible modem emulation (AT commands)
+- MQTT publishing of alarm state and events
+- Home Assistant MQTT Discovery support
 - Debug output via USB serial
 
 ## Quick start
@@ -50,18 +61,18 @@ static constexpr unsigned long MODEM_BAUD = 9600;
 ```
 
 Wiring:
-- Disconnect the Sim900 RX/TX lines from the alarm controller.
-- Connect the alarm controller TX to the ESP32 `MODEM_RX` pin.
-- Connect the alarm controller RX to the ESP32 `MODEM_TX` pin.
+- Disconnect the Sim900 RX/TX lines from the alarm system microcontroller.
+- Connect the alarm system microcontroller TX to the ESP32 `MODEM_RX` pin.
+- Connect the alarm system microcontroller RX to the ESP32 `MODEM_TX` pin.
 
-## Serial / Debug
+## Serial Debug
 
 - USB debug serial: `MONITOR_BAUD` is set in `include/Sim900Emulator.h` (default 115200).
-- The emulator prints RX/TX and internal state to the monitor for troubleshooting. 
+- The emulator prints RX/TX traffic and internal state to the monitor for troubleshooting. 
 - The debug output includes escape sequences to color the messages.
-- `useAnsiColor = true` in `include/DebugInterface.h` injects ANSI color codes at compile time. To remove colors, set it to false and recompile.
-If colors don't appear, the serial monitor/terminal likely doesn't support ANSI escapes - use a compatible terminal or disable colors.
-- VSCode Terminal supports it, specify `monitor_raw = yes` in `platformio.ini` to enable.
+  - `useAnsiColor = true` in `include/DebugInterface.h` injects ANSI color codes at compile time. To remove colors, set it to false and recompile.
+  If colors don't appear, the serial monitor/terminal likely doesn't support ANSI escapes - use a compatible terminal or disable colors.
+  - VSCode Terminal supports it, specify `monitor_raw = yes` in `platformio.ini` to enable.
 
 ## Build & upload (PlatformIO)
 
@@ -83,20 +94,15 @@ Or use the PlatformIO tasks in VS Code.
 ## Home Assistant Integration
 
 - The firmware publishes MQTT discovery payloads so sensors are auto-created in Home Assistant.
-
 - Example discovery topic: `homeassistant/sensor/<device_id>/alarmcontrol_status/config`.
-
 - State topic example: `aha/<device_id>/alarmcontrol_status/stat_t`.
-
 - If a sensor appears but shows no state, check that the discovery JSON's `stat_t` matches the topic you publish to and remove invalid fields (e.g., do not use `unit_of_meas: "string"`).
 
 ## Troubleshooting
 
 - Wi‑Fi not connecting: open serial monitor and check logs.
-
 - MQTT connection errors: verify `BROKER_ADDR`, `BROKER_USERNAME`, and `BROKER_PASSWORD`.
-
-- Wrong pins/baud: confirm `MODEM_TX`/`MODEM_RX` and `MODEM_BAUD` match your device.
+- Wrong pins: confirm `MODEM_TX`/`MODEM_RX` are connected correctly.
 
 ## License
 See `LICENSE` in the project root.
