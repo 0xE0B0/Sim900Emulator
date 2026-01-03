@@ -60,10 +60,16 @@ static constexpr int MODEM_RX = 17;        // ESP32 pin used as RX (connect to a
 static constexpr unsigned long MODEM_BAUD = 9600;
 ```
 
-Wiring:
-- Disconnect the Sim900 RX/TX lines from the alarm system microcontroller.
-- Connect the alarm system microcontroller TX to the ESP32 `MODEM_RX` pin.
-- Connect the alarm system microcontroller RX to the ESP32 `MODEM_TX` pin.
+## Wiring
+
+- Disconnect the Sim900 RX/TX lines from the alarm system microcontroller (remove R29 and R32)
+- Connect the alarm system microcontroller TX (R29 bottom pad) to the ESP32 `MODEM_RX` pin via 2k2 resistor
+- Connect the alarm system microcontroller RX (R32 botom pad) to the ESP32 `MODEM_TX` pin via 2k2 resistor
+
+<p align="left">
+  <img src="img/sa2700.jpg" alt="overview " width="30%">
+  <img src="img/sa2700_rxtx.jpg" alt="rx/tx wiring" width="30%">
+</p>
 
 ## Serial Debug
 
