@@ -37,32 +37,41 @@ static void onButtonCommand(HAButton* sender) {
 void setup() {
     Serial.begin(MONITOR_BAUD);
     Serial << beginl << "Emulator v" << VERSION << " started" << DI::endl;
+    emulator.init();
 
-    // WiFi.mode(WIFI_STA);
-    // WiFi.disconnect();
-    // delay(100);
-    // Serial.println("Scanning...");
-    // int n = WiFi.scanNetworks();
-    // for (int i = 0; i < n; ++i) {
-    //     Serial.println(WiFi.SSID(i));
-    // }
+#ifdef NETWORK_SSID_SCAN
+    WiFi.mode(WIFI_STA);
+    WiFi.disconnect();
+    delay(100);
+    Serial.println("Scanning...");
+    int n = WiFi.scanNetworks();
+    for (int i = 0; i < n; ++i) {
+        Serial.println(WiFi.SSID(i));
+    }
+#endif
 
     WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
     WiFi.setSleep(false);
     Serial << beginl << "Connecting to WiFi..." << DI::endl;
-    int timeout = 60; // seconds
-    while (timeout-- > 0 && WiFi.status() != WL_CONNECTED) {
-        delay(1000);
-        Serial << ".";
-    }
-    if (WiFi.status() != WL_CONNECTED) {
-        Serial << beginl << red << "Failed to connect to WiFi, stopping" << DI::endl;
-        return;
-    }
-    Serial << beginl << "WiFi connected" << DI::endl;
-    Serial << beginl << "SSID: " << WiFi.SSID() << DI::endl;
-    Serial << beginl << "IP address: " << WiFi.localIP() << DI::endl;
-    emulator.init();
+    emulator.led.setState(LEDControl::LedState::LED_FLASH_SLOW);
+
+    WiFi.onEvent([](WiFiEvent_t event) {
+        // handle WiFi events
+        if (event == ARDUINO_EVENT_WIFI_STA_GOT_IP) {
+            // connected and got IP
+            Serial << beginl << "WiFi connected" << DI::endl;
+            Serial << beginl << "SSID: " << WiFi.SSID() << DI::endl;
+            Serial << beginl << "IP address: " << WiFi.localIP() << DI::endl; 
+            emulator.led.setState(LEDControl::LedState::LED_FLASH_FAST);
+            // start MQTT connection
+            if (mqtt.begin(BROKER_ADDR, BROKER_USERNAME, BROKER_PASSWORD))
+                Serial << beginl << "MQTT connecting... " << DI::endl;
+        } else if (event == ARDUINO_EVENT_WIFI_STA_DISCONNECTED) {
+            // lost connection
+            Serial << beginl << red << "Lost WiFi connection" << DI::endl;
+            emulator.led.setState(LEDControl::LedState::LED_FLASH_SLOW);
+        }
+    });
 
     byte mac[6];
     WiFi.macAddress(mac);
@@ -74,19 +83,25 @@ void setup() {
     device.enableSharedAvailability();
     device.enableLastWill();
 
-    mqtt.begin(BROKER_ADDR, BROKER_USERNAME, BROKER_PASSWORD);
-    Serial << beginl << "MQTT connecting... " << DI::endl;
 }
 
 void loop() {
+    static bool mqttStartup = false;
     static bool mqttConnected = false;
     if (WiFi.status() == WL_CONNECTED) {
         mqtt.loop();
-        if (mqttConnected != mqtt.isConnected()) {
-            mqttConnected = mqtt.isConnected();
-            Serial << beginl << (mqttConnected ? green : red) << "MQTT " << (mqttConnected ? "connected" : "disconnected") << DI::endl;
+        bool connected = mqtt.isConnected();
+        if (mqttConnected != connected) {
+            mqttConnected = connected;
             if (mqttConnected) {
+                emulator.led.setState(LEDControl::LedState::LED_ON);
+            } else {
+                emulator.led.setState(LEDControl::LedState::LED_FLASH_FAST);
+            }
+            Serial << beginl << (mqttConnected ? green : red) << "MQTT " << (mqttConnected ? "connected" : "disconnected") << DI::endl;
+            if (!mqttStartup) {
                 // publish initial state
+                mqttStartup = true;
                 status.setValue("N/A");
                 source.setValue("N/A");
                 message.setValue("N/A");
@@ -97,6 +112,7 @@ void loop() {
 }
 
 void Emulator::init() {
+
     sim900.init();
 
     status.setName("Status");
@@ -168,6 +184,7 @@ Emulator::CommandState Emulator::parseCommandResponse(const FixedString128 &msg)
 
 void Emulator::loop() {
     sim900.loop();
+    led.loop();
     bool sendUpdate = false;
     FixedString128 msg;
     if (sim900.getMessage(msg)) {
@@ -283,5 +300,6 @@ void Emulator::loop() {
     if (sendUpdate) {
         status.setValue(currentStatus.c_str());
         Serial << beginl << green << "MQTT Status: " << currentStatus << DI::endl;
+        led.indicate(3);  // flash LED to indicate status update
     }
 }

@@ -4,16 +4,26 @@
 #include <HardwareSerial.h>
 #include <PrintStream.h>
 #include "Sim900.h"
+#include "LEDControl.h"
 #include "FixedString.h"
 #include <ArduinoHA.h>
 
-static constexpr char VERSION[] = "1.0.4";
+static constexpr char VERSION[] = "1.0.5";
 
 // USB UART for debugging
 constexpr unsigned long MONITOR_BAUD = 115200;
 
 // min. update interval for MQTT status sensor
 constexpr unsigned long MQTT_KEEP_ALIVE = 60000;  // milliseconds
+
+constexpr uint8_t LED_PIN = 2; // built-in LED pin
+
+// status LED behavior:
+// - off: initializing / no WiFi
+// - slow flash: WiFi connecting
+// - fast flash: WiFi connected, MQTT connecting
+// - on: MQTT connected
+// - three quick flashes: status update sent (keep-alive or on change)
 
 class Emulator {
 public:
@@ -37,6 +47,9 @@ public:
     bool sendCommand(const Command cmd);
     CommandState parseCommandResponse(const FixedString128 &msg);
 
+    // status LED
+    LEDControl led{LED_PIN};
+
 private:
 
     // note: pin and key must be configured in the SA2700 alarm system
@@ -46,4 +59,5 @@ private:
     Sim900 sim900;
     FixedString128 currentStatus = FixedString128("N/A");
     unsigned long lastUpdate = 0;
+
 };

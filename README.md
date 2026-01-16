@@ -1,4 +1,5 @@
 # Sim900 Emulator
+
 This ESP32 firmware emulates a SIM900 GSM modem for legacy Blaupunkt alarm systems (e.g. SA2700, SA2500) and exposes alarm events via MQTT for Home Assistant integration.
 
 Many of these alarm systems depend on a SIM900 modem using 2G, which is no longer supported by modern SIM cards and cellular networks in many regions. As a result, the original functionality is unusable, despite the alarm system hardware (door and motion sensors, alarm logic) remaining fully functional.
@@ -8,6 +9,7 @@ This project replaces the cellular modem with a local ESP32-based emulator, pres
 ## Overview
 
 Sim900Emulator is an ESP32-based SIM900 modem emulator that:
+
 - Communicates with the alarm system over a hardware UART
 - Responds with SIM900-compatible AT command behavior
 - Publishes alarm states, events, and messages to MQTT
@@ -71,6 +73,26 @@ static constexpr unsigned long MODEM_BAUD = 9600;
   <img src="img/sa2700_rxtx.jpg" alt="rx/tx wiring" width="30%">
 </p>
 
+## Status LED
+
+A status LED can be connected to an I/O pin to indicate the Wifi and MQTT connection state. The used pin is defined in `include/Sim900Emulator.h`:
+
+```cpp
+constexpr uint8_t LED_PIN = 2; // built-in LED pin
+```
+
+Wiring:
+
+- Connect an LED with resistor in series from the defined LED pin to GND.
+
+LED behavior:
+
+- off: initializing / no WiFi
+- slow flash: WiFi connecting
+- fast flash: WiFi connected, MQTT connecting
+- on: MQTT connected
+- three quick flashes: status update sent (keep-alive or on change)
+
 ## Serial Debug
 
 - USB debug serial: `MONITOR_BAUD` is set in `include/Sim900Emulator.h` (default 115200).
@@ -111,5 +133,5 @@ Or use the PlatformIO tasks in VS Code.
 - Wrong pins: confirm `MODEM_TX`/`MODEM_RX` are connected correctly.
 
 ## License
-See `LICENSE` in the project root.
 
+See `LICENSE` in the project root.
