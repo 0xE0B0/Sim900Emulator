@@ -37,7 +37,11 @@ private:
     static constexpr int MODEM_RX = 17;
     static constexpr unsigned long MODEM_BAUD = 9600;
 
-    static constexpr int responseDelay = 100; // delay in milliseconds before sending a response
+    // delay in milliseconds before sending a response
+    // the alarm system controller seems to need some time between responses
+    // otherwise it may hang in its initialization phase
+    static constexpr int responseDelay = 100;
+
     HardwareSerial ModemSerial{1};
 
     static constexpr char smsId[] = "1";

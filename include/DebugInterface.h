@@ -10,6 +10,9 @@ static constexpr bool timeStampEnabled = true;
 // note: requires a terminal which suports ANSI escape sequences
 static constexpr bool useAnsiColor = true;
 
+// debug output baud rate
+static constexpr uint32_t debugBaudRate = 115200;
+
 enum class Color {
     Default,
     Red,
@@ -25,6 +28,7 @@ class EscapeSequence {
 public:
 
     static EscapeSequence reset() { return EscapeSequence(RESET); }
+    static EscapeSequence clearLine() { return EscapeSequence(CLEAR_LINE); }
 
     EscapeSequence(const char* seq) : sequence(seq) {}
     const char* sequence;
@@ -41,6 +45,7 @@ public:
             default:             return RESET;
         }
     }
+
 private:
     static constexpr const char* RED = "\033[1;31m";
     static constexpr const char* GREEN = "\033[1;32m";
@@ -50,6 +55,7 @@ private:
     static constexpr const char* CYAN = "\033[1;36m";
     static constexpr const char* WHITE = "\033[1;37m";
     static constexpr const char* RESET = "\033[0m";
+    static constexpr const char* CLEAR_LINE = "\033[F\033[K";
 
 };
 
@@ -103,6 +109,12 @@ inline Print& resetColor(Print &stream) {
     return stream;
 }
 
+inline Print& clearLine(Print &stream) {
+    // move cursor up one line and clear the line
+    stream << EscapeSequence::clearLine();
+    return stream;
+}
+
 template <const char* moduleName>
 inline Print& beginl(Print &stream) {
     if constexpr (timeStampEnabled)
@@ -119,7 +131,7 @@ inline Print& beginl(Print &stream) {
 
 struct DI {
     static inline Print& endl(Print &stream) {
-        if constexpr (useAnsiColor)
+        if constexpr(useAnsiColor)
             stream << EscapeSequence::reset();
         stream << "\n";
         return stream;

@@ -5,18 +5,15 @@
 #include <PrintStream.h>
 #include "Sim900.h"
 #include "LEDControl.h"
+#include "version.h"
 #include "FixedString.h"
 #include <ArduinoHA.h>
-
-static constexpr char VERSION[] = "1.0.5";
-
-// USB UART for debugging
-constexpr unsigned long MONITOR_BAUD = 115200;
 
 // min. update interval for MQTT status sensor
 constexpr unsigned long MQTT_KEEP_ALIVE = 60000;  // milliseconds
 
-constexpr uint8_t LED_PIN = 2; // built-in LED pin
+ // built-in LED pin
+constexpr uint8_t LED_PIN = 2;
 
 // status LED behavior:
 // - off: initializing / no WiFi
@@ -59,5 +56,7 @@ private:
     Sim900 sim900;
     FixedString128 currentStatus = FixedString128("N/A");
     unsigned long lastUpdate = 0;
+
+    bool mqttConnected = false;
 
 };

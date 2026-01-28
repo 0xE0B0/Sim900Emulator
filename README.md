@@ -24,33 +24,13 @@ Sim900Emulator is an ESP32-based SIM900 modem emulator that:
 - Home Assistant MQTT Discovery support
 - Debug output via USB serial
 
-## Quick start
+- WiFi configuration and OTA firmware update via WifiManager
+  (See https://github.com/tzapu/WiFiManager - WifiManager GitHub project for WiFi configuration)
 
-1. Rename `include/credentials_template.h` to `include/credentials.h` and fill in your Wi‑Fi and MQTT broker credentials (see example below).
-2. Optionally set modem UART pins in `include/Sim900.h` (defaults shown below).
-3. Build and upload with PlatformIO or VS Code PlatformIO extension.
 
 ## Configure Wi‑Fi and MQTT
 
-Copy and edit the template file:
-
-`include/credentials_template.h` (example)
-
-```cpp
-#pragma once
-// wifi and MQTT credentials for the Sim900Emulator
-
-#define WIFI_SSID           "YOUR_SSID"
-#define WIFI_PASSWORD       "YOUR_WIFI_PASSWORD"
-
-#define BROKER_ADDR         IPAddress(192,168,1,100) // set to your broker's IP
-#define BROKER_USERNAME     "mqtt_user"
-#define BROKER_PASSWORD     "mqtt_password"
-
-```
-
-After editing, rename the file to `include/credentials.h`.
-Do not commit `include/credentials.h` to a public repository.
+Press the configuration button at startup to enter configuration mode. The firmware attempts to connect using stored WiFi credentials. If connection fails, it starts in AP mode at `192.168.4.1`. Access this address in a web browser to configure WiFi SSID, password, and MQTT broker settings.
 
 ## Modem UART pins and baud rate (ESP32)
 
@@ -73,12 +53,26 @@ static constexpr unsigned long MODEM_BAUD = 9600;
   <img src="img/sa2700_rxtx.jpg" alt="rx/tx wiring" width="30%">
 </p>
 
+## Configuration Button
+
+A push button should be connected to an I/O pin to enter the Wifi configuration mode. The used pin is defined in `include/Sim900Emulator.h`:
+
+```cpp
+// button to enter WiFi config mode
+constexpr uint8_t BUTTON_PIN = 0;
+```
+
+Wiring:
+
+- Connect an push button from the defined LED pin to GND.
+
 ## Status LED
 
 A status LED can be connected to an I/O pin to indicate the Wifi and MQTT connection state. The used pin is defined in `include/Sim900Emulator.h`:
 
 ```cpp
-constexpr uint8_t LED_PIN = 2; // built-in LED pin
+ // built-in LED pin
+constexpr uint8_t LED_PIN = 2;
 ```
 
 Wiring:
@@ -95,7 +89,7 @@ LED behavior:
 
 ## Serial Debug
 
-- USB debug serial: `MONITOR_BAUD` is set in `include/Sim900Emulator.h` (default 115200).
+- USB debug serial: `debugBaudRate = 115200` defines the used baudrate.
 - The emulator prints RX/TX traffic and internal state to the monitor for troubleshooting. 
 - The debug output includes escape sequences to color the messages.
   - `useAnsiColor = true` in `include/DebugInterface.h` injects ANSI color codes at compile time. To remove colors, set it to false and recompile.
@@ -125,12 +119,6 @@ Or use the PlatformIO tasks in VS Code.
 - Example discovery topic: `homeassistant/sensor/<device_id>/alarmcontrol_status/config`.
 - State topic example: `aha/<device_id>/alarmcontrol_status/stat_t`.
 - If a sensor appears but shows no state, check that the discovery JSON's `stat_t` matches the topic you publish to and remove invalid fields (e.g., do not use `unit_of_meas: "string"`).
-
-## Troubleshooting
-
-- Wi‑Fi not connecting: open serial monitor and check logs.
-- MQTT connection errors: verify `BROKER_ADDR`, `BROKER_USERNAME`, and `BROKER_PASSWORD`.
-- Wrong pins: confirm `MODEM_TX`/`MODEM_RX` are connected correctly.
 
 ## License
 

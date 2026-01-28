@@ -1,7 +1,38 @@
+#include <FS.h>  // must be included first
+#include <SPIFFS.h>
 #include "Sim900Emulator.h"
-#include "credentials.h"
 #include "DebugInterface.h"
 #include <WiFi.h>
+#include <WifiManager.h>
+#include <ArduinoJson.h>
+
+#define STRINGIFY(x) #x
+#define STRINGIFY_EXP(x) STRINGIFY(x)
+
+#define VERSION STRINGIFY_EXP(EMU_VERSION_MAJOR) "." STRINGIFY_EXP(EMU_VERSION_MINOR) "." STRINGIFY_EXP(EMU_VERSION_SUB)
+
+// Access point name
+static constexpr const char* APName = "Sim900Emulator_AP";
+// Configuration file path in SPIFFS filesystem
+static constexpr const char* configFilePath = "/config.json";
+
+struct WifiSettings {
+    char apName[20] = "";
+    char apPassword[20] = "";
+};
+
+struct MqttSettings {
+    char clientId[20] = "Sim900Emulator";
+    char hostName[40] = "192.168.178.221";
+    char port[6] = "1883";
+    char user[20];
+    char password[20];
+    char clientId_id[15] = "mqtt_client_id";
+    char hostName_id[14] = "mqtt_hostname";
+    char port_id[10] = "mqtt_port";
+    char user_id[10] = "mqtt_user";
+    char password_id[14] = "mqtt_password";
+};
 
 // debug output module identifier
 static inline Print& beginl(Print &stream) {
@@ -10,9 +41,21 @@ static inline Print& beginl(Print &stream) {
 }
 
 Emulator emulator;
+WiFiManager wifiManager;
+MqttSettings mqttSettings;
+WifiSettings wifiSettings;
 WiFiClient client;
 HADevice device;
 HAMqtt mqtt(client, device);
+
+// MQTT settings for WiFiManager web portal
+WiFiManagerParameter custom_mqtt_client_id("client_id", "MQTT Client ID", mqttSettings.clientId, sizeof(mqttSettings.clientId));
+WiFiManagerParameter custom_mqtt_server("server", "MQTT Server", mqttSettings.hostName, sizeof(mqttSettings.hostName));
+WiFiManagerParameter custom_mqtt_port("port", "MQTT Port", mqttSettings.port, sizeof(mqttSettings.port));
+WiFiManagerParameter custom_mqtt_user("user", "MQTT User", mqttSettings.user, sizeof(mqttSettings.user));
+WiFiManagerParameter custom_mqtt_pass("pass", "MQTT Password", mqttSettings.password, sizeof(mqttSettings.password));
+// Firmware version info for web portal
+WiFiManagerParameter fwInfo("<p>Firmware Version: v" VERSION "<br>Build Time: " __TIMESTAMP__ "</p>");
 
 // note: HAMqtt must be initialized before any sensors
 HASensor status("alarmcontrol_status");
@@ -23,8 +66,8 @@ HAButton updateCmd("alarmcontrol_update");
 HAButton armCmd("alarmcontrol_arm");
 HAButton disarmCmd("alarmcontrol_disarm");
 
-// button command callback
-static void onButtonCommand(HAButton* sender) {
+// HA button command callback
+static void buttonCommand_cb(HAButton* sender) {
     if (sender == &updateCmd) {
         emulator.sendCommand(Emulator::Command::GetStatus);
     } else if (sender == &armCmd) {
@@ -34,61 +77,126 @@ static void onButtonCommand(HAButton* sender) {
     }
 }
 
-void setup() {
-    Serial.begin(MONITOR_BAUD);
-    Serial << beginl << "Emulator v" << VERSION << " started" << DI::endl;
-    emulator.init();
+// Webportal callback notifying about the need to save config
+void saveConfig_cb () {
+    Serial << beginl << blue << "Saving MQTT credentials to config file" << DI::endl;
+    strcpy(mqttSettings.clientId, custom_mqtt_client_id.getValue());
+    strcpy(mqttSettings.hostName, custom_mqtt_server.getValue());
+    strcpy(mqttSettings.port, custom_mqtt_port.getValue());
+    strcpy(mqttSettings.user, custom_mqtt_user.getValue());
+    strcpy(mqttSettings.password, custom_mqtt_pass.getValue());
 
-#ifdef NETWORK_SSID_SCAN
-    WiFi.mode(WIFI_STA);
-    WiFi.disconnect();
-    delay(100);
-    Serial.println("Scanning...");
-    int n = WiFi.scanNetworks();
-    for (int i = 0; i < n; ++i) {
-        Serial.println(WiFi.SSID(i));
+    JsonDocument json;
+    json[mqttSettings.clientId_id] = mqttSettings.clientId;
+    json[mqttSettings.hostName_id] = mqttSettings.hostName;
+    json[mqttSettings.port_id] = mqttSettings.port;
+    json[mqttSettings.user_id] = mqttSettings.user;
+    json[mqttSettings.password_id] = mqttSettings.password;
+    File configFile = SPIFFS.open(configFilePath, "w");
+    if (!configFile) {
+        Serial << beginl << red << "Failed to save config file " << configFilePath << DI::endl;
+    } else {
+        Serial << beginl << green << "Config file " << configFilePath << " saved" << DI::endl;
+        serializeJson(json, Serial);
+        serializeJson(json, configFile);
+        configFile.close();
     }
-#endif
+}
 
-    WiFi.begin(WIFI_SSID, WIFI_PASSWORD);
-    WiFi.setSleep(false);
-    Serial << beginl << "Connecting to WiFi..." << DI::endl;
+void initializeWifiManager() {
+
+    // Read MQTT settings from config file
+    if (SPIFFS.begin(true)) {
+        if (!SPIFFS.exists(configFilePath)) {
+            Serial << beginl << yellow << "Creating empty config file " << configFilePath << DI::endl;
+            SPIFFS.open(configFilePath, "w").close();
+        } else {
+            File configFile = SPIFFS.open(configFilePath, "r");
+            if (configFile) {
+                size_t size = configFile.size();
+                std::unique_ptr<char[]> buf(new char[size]);
+                configFile.readBytes(buf.get(), size);
+                JsonDocument json;
+                auto error = deserializeJson(json, buf.get());
+                serializeJson(json, Serial);
+                if (error) {
+                    Serial << beginl << red << "Failed to read config file " << configFilePath << DI::endl;
+                } else {
+                    strcpy(mqttSettings.clientId, json[mqttSettings.clientId_id]);
+                    strcpy(mqttSettings.hostName, json[mqttSettings.hostName_id]);
+                    strcpy(mqttSettings.port, json[mqttSettings.port_id]);
+                    strcpy(mqttSettings.user, json[mqttSettings.user_id]);
+                    strcpy(mqttSettings.password, json[mqttSettings.password_id]);
+                }
+                Serial << beginl << green << "Config file " << configFilePath << " loaded" << DI::endl;
+                configFile.close();
+            }
+        }
+    } else {
+        Serial << beginl << red << "Failed to mount file system" << DI::endl;
+    }
+
+    wifiManager.addParameter(&custom_mqtt_client_id);
+    wifiManager.addParameter(&custom_mqtt_server);
+    wifiManager.addParameter(&custom_mqtt_port);
+    wifiManager.addParameter(&custom_mqtt_user);
+    wifiManager.addParameter(&custom_mqtt_pass);
+    wifiManager.addParameter(&fwInfo);
+
+    wifiManager.setBreakAfterConfig(true);  // must be set otherwise the saveConfig_cb is not called
+    wifiManager.setSaveConfigCallback(saveConfig_cb);
+    wifiManager.setConfigPortalTimeout(60);
+    wifiManager.setConfigPortalBlocking(false);
+    wifiManager.setDarkMode(true);
+
+    if (!wifiManager.autoConnect(APName)) {
+        Serial << beginl << yellow << "started config portal in AP mode, IP: " << WiFi.softAPIP() << DI::endl;
+    } else  {
+        Serial << beginl << green << "started config portal with WiFi connection, IP: " << WiFi.localIP() << DI::endl;
+        wifiManager.startWebPortal();
+    }
+}
+
+void setup() {
+    Serial.begin(debugBaudRate);
+    Serial << magenta << F("Sim900Emulator v");
+    Serial << magenta << VERSION;
+    Serial << magenta << F(" (") <<  __TIMESTAMP__  << F(")") << DI::endl;
+
+    emulator.init();
     emulator.led.setState(LEDControl::LedState::LED_FLASH_SLOW);
 
-    WiFi.onEvent([](WiFiEvent_t event) {
-        // handle WiFi events
-        if (event == ARDUINO_EVENT_WIFI_STA_GOT_IP) {
-            // connected and got IP
-            Serial << beginl << "WiFi connected" << DI::endl;
-            Serial << beginl << "SSID: " << WiFi.SSID() << DI::endl;
-            Serial << beginl << "IP address: " << WiFi.localIP() << DI::endl; 
-            emulator.led.setState(LEDControl::LedState::LED_FLASH_FAST);
-            // start MQTT connection
-            if (mqtt.begin(BROKER_ADDR, BROKER_USERNAME, BROKER_PASSWORD))
-                Serial << beginl << "MQTT connecting... " << DI::endl;
-        } else if (event == ARDUINO_EVENT_WIFI_STA_DISCONNECTED) {
-            // lost connection
-            Serial << beginl << red << "Lost WiFi connection" << DI::endl;
-            emulator.led.setState(LEDControl::LedState::LED_FLASH_SLOW);
-        }
-    });
+    Serial << beginl << green << "Connecting to WiFi..." << DI::endl;
+    WiFi.mode(WIFI_MODE_STA);
+    initializeWifiManager();
 
     byte mac[6];
     WiFi.macAddress(mac);
     device.setUniqueId(mac, sizeof(mac));
-    device.setName("Sim900Emulator");
+    device.setName(mqttSettings.clientId);
     device.setSoftwareVersion(VERSION);
     device.setManufacturer("NotYourHome");
     device.setAvailability(true);
     device.enableSharedAvailability();
     device.enableLastWill();
-
+    
 }
 
 void loop() {
+    static bool wifiConnected = false;
     static bool mqttStartup = false;
     static bool mqttConnected = false;
     if (WiFi.status() == WL_CONNECTED) {
+        if (!wifiConnected) {
+            wifiConnected = true;
+            Serial << beginl << green << "WiFi connected" << DI::endl;
+            Serial << beginl << "SSID: " << WiFi.SSID() << DI::endl;
+            Serial << beginl << "IP address: " << WiFi.localIP() << DI::endl; 
+            emulator.led.setState(LEDControl::LedState::LED_FLASH_FAST);
+            // start MQTT connection
+            if (mqtt.begin(mqttSettings.hostName, atoi(mqttSettings.port), mqttSettings.user, mqttSettings.password))
+                Serial << beginl << green << "MQTT connecting... " << DI::endl;
+        }
         mqtt.loop();
         bool connected = mqtt.isConnected();
         if (mqttConnected != connected) {
@@ -107,8 +215,16 @@ void loop() {
                 message.setValue("N/A");
             }
         }
+    } else {
+        if (wifiConnected) {
+            wifiConnected = false;
+            mqttConnected = false;
+            Serial << beginl << red << "Lost WiFi connection" << DI::endl;
+            emulator.led.setState(LEDControl::LedState::LED_FLASH_SLOW);
+        }
     }
     emulator.loop();
+    wifiManager.process();
 }
 
 void Emulator::init() {
@@ -129,9 +245,9 @@ void Emulator::init() {
     armCmd.setIcon("mdi:shield-lock");
     disarmCmd.setIcon("mdi:shield-lock-open");
 
-    updateCmd.onCommand(onButtonCommand);
-    armCmd.onCommand(onButtonCommand);
-    disarmCmd.onCommand(onButtonCommand);
+    updateCmd.onCommand(buttonCommand_cb);
+    armCmd.onCommand(buttonCommand_cb);
+    disarmCmd.onCommand(buttonCommand_cb);
 
     // request initial status
     sendCommand(Command::GetStatus);
