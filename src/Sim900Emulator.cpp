@@ -23,9 +23,9 @@ struct WifiSettings {
 
 struct MqttSettings {
     char clientId[20] = "Sim900Emulator";
-    char hostName[40] = "192.168.178.221";
+    char hostName[40] = "192.168.178.220";
     char port[6] = "1883";
-    char user[20];
+    char user[20] = "mqtt-user";
     char password[20];
     char clientId_id[15] = "mqtt_client_id";
     char hostName_id[14] = "mqtt_hostname";
@@ -114,7 +114,7 @@ void initializeWifiManager() {
             File configFile = SPIFFS.open(configFilePath, "r");
             if (configFile) {
                 size_t size = configFile.size();
-                std::unique_ptr<char[]> buf(new char[size]);
+                std::unique_ptr<char[]> buf(new char[size + 1]);
                 configFile.readBytes(buf.get(), size);
                 JsonDocument json;
                 auto error = deserializeJson(json, buf.get());
@@ -143,12 +143,18 @@ void initializeWifiManager() {
     wifiManager.addParameter(&custom_mqtt_pass);
     wifiManager.addParameter(&fwInfo);
 
-    wifiManager.setBreakAfterConfig(true);  // must be set otherwise the saveConfig_cb is not called
-    wifiManager.setSaveConfigCallback(saveConfig_cb);
+    // note: callbacks are only called when changing wifi settings,
+    // *not* on custom param changes and clicking "save" button
+    // -> enter <ip>/wifisave in the web browser to trigger the callback
+    wifiManager.setPreSaveConfigCallback(saveConfig_cb);
+
+    wifiManager.setBreakAfterConfig(false);
     wifiManager.setConfigPortalTimeout(60);
+    wifiManager.setConnectTimeout(60);
     wifiManager.setConfigPortalBlocking(false);
     wifiManager.setDarkMode(true);
-
+    std::vector<const char*> menuItems = {"wifi", "info", "param", "sep", "update"};
+    wifiManager.setMenu(menuItems);
     if (!wifiManager.autoConnect(APName)) {
         Serial << beginl << yellow << "started config portal in AP mode, IP: " << WiFi.softAPIP() << DI::endl;
     } else  {
@@ -168,6 +174,7 @@ void setup() {
 
     Serial << beginl << green << "Connecting to WiFi..." << DI::endl;
     WiFi.mode(WIFI_MODE_STA);
+    WiFi.setSleep(false);
     initializeWifiManager();
 
     byte mac[6];
