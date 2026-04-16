@@ -61,6 +61,7 @@ WiFiManagerParameter fwInfo("<p>Firmware Version: v" VERSION "<br>Build Time: " 
 HASensor status("alarmcontrol_status");
 HASensor source("alarmcontrol_source");
 HASensor message("alarmcontrol_message");
+HASensor temperature("chip_temperature");
 
 HAButton updateCmd("alarmcontrol_update");
 HAButton armCmd("alarmcontrol_arm");
@@ -193,6 +194,9 @@ void loop() {
     static bool wifiConnected = false;
     static bool mqttStartup = false;
     static bool mqttConnected = false;
+    static unsigned long lastMqttReconnectAttempt = 0;
+    static const unsigned long MQTT_RECONNECT_INTERVAL = 5000;  // 5 seconds between reconnect attempts
+    
     if (WiFi.status() == WL_CONNECTED) {
         if (!wifiConnected) {
             wifiConnected = true;
@@ -203,7 +207,19 @@ void loop() {
             // start MQTT connection
             if (mqtt.begin(mqttSettings.hostName, atoi(mqttSettings.port), mqttSettings.user, mqttSettings.password))
                 Serial << beginl << green << "MQTT connecting... " << DI::endl;
+            lastMqttReconnectAttempt = millis();
         }
+        
+        // Attempt to reconnect MQTT if disconnected
+        if (!mqtt.isConnected() && (millis() - lastMqttReconnectAttempt) > MQTT_RECONNECT_INTERVAL) {
+            lastMqttReconnectAttempt = millis();
+            Serial << beginl << yellow << "Attempting MQTT reconnect..." << DI::endl;
+            if (mqtt.begin(mqttSettings.hostName, atoi(mqttSettings.port), mqttSettings.user, mqttSettings.password))
+                Serial << beginl << green << "MQTT reconnecting... " << DI::endl;
+            else
+                Serial << beginl << red << "MQTT reconnect attempt failed" << DI::endl;
+        }
+        
         mqtt.loop();
         bool connected = mqtt.isConnected();
         if (mqttConnected != connected) {
@@ -241,6 +257,7 @@ void Emulator::init() {
     status.setName("Status");
     source.setName("Source");
     message.setName("Message");
+    temperature.setName("Chip Temperature");
     updateCmd.setName("Update Status");
     armCmd.setName("Arm");
     disarmCmd.setName("Disarm");
@@ -248,6 +265,8 @@ void Emulator::init() {
     status.setIcon("mdi:alarm-panel");
     source.setIcon("mdi:source-branch");
     message.setIcon("mdi:message-text");
+    temperature.setIcon("mdi:thermometer");
+    temperature.setUnitOfMeasurement("°C");
     updateCmd.setIcon("mdi:refresh");
     armCmd.setIcon("mdi:shield-lock");
     disarmCmd.setIcon("mdi:shield-lock-open");
@@ -318,7 +337,9 @@ void Emulator::loop() {
         //      "BW Flur|Einbruch"
         //      "BW Wohnzimmer|Einbruch|BW Kueche|Einbruch"
         //      "Confirmed|PROG 1207 MODE?:A"  (response to command)
-        std::vector<FixedString128> sources;
+        static constexpr int MAX_SOURCES = 10;
+        FixedString128 sources[MAX_SOURCES];
+        int sourceCount = 0;
         FixedString128 statusValue;
         const char* s = msg.c_str();
         int len = msg.length();
@@ -351,7 +372,9 @@ void Emulator::loop() {
                 memcpy(fs.buf, s + start, copyLen);
                 fs.buf[copyLen] = '\0';
                 fs.len = copyLen;
-                sources.push_back(fs);
+                if (sourceCount < MAX_SOURCES) {
+                    sources[sourceCount++] = fs;
+                }
 
                 FixedString128 statusBuf;
                 int copyStat = statLen;
@@ -383,11 +406,11 @@ void Emulator::loop() {
         }
         // note: observe order, set source first, then status,
         // to allow HA to read up-to-date sources when triggering on status change
-        if (!sources.empty()) {
+        if (sourceCount > 0) {
             // check if this is a response to a previous command
-            if (sources.size() == 1 && sources[0].startsWith("Confirmed")) {
-                sources.clear();
-                sources.push_back(FixedString128("Kommandobestaetigung"));
+            if (sourceCount == 1 && sources[0].startsWith("Confirmed")) {
+                sourceCount = 1;
+                sources[0].set("Kommandobestaetigung");
                 auto cmdState = parseCommandResponse(statusValue);
                 Serial << beginl << "Command response, state: " << (int)cmdState << DI::endl;
                 switch(cmdState) {
@@ -404,7 +427,7 @@ void Emulator::loop() {
             }
             // join sources with comma into a FixedString128
             FixedString128 sourcesList;
-            for (size_t i = 0; i < sources.size(); ++i) {
+            for (int i = 0; i < sourceCount; ++i) {
                 if (i > 0) sourcesList.append(", ");
                 sourcesList.append(sources[i].c_str());
             }
@@ -420,6 +443,19 @@ void Emulator::loop() {
         lastUpdate = millis();
         sendUpdate = true;
     }
+    
+    // Read and publish chip temperature
+    static unsigned long lastTempUpdate = 0;
+    if ((millis() - lastTempUpdate) > MQTT_KEEP_ALIVE) {
+        lastTempUpdate = millis();
+        float tempC = temperatureRead();
+        // Format temperature as string with one decimal place
+        char tempBuf[16];
+        snprintf(tempBuf, sizeof(tempBuf), "%.1f", tempC);
+        temperature.setValue(tempBuf);
+        Serial << beginl << green << "Chip Temperature: " << tempBuf << "°C" << DI::endl;
+    }
+    
     if (sendUpdate) {
         status.setValue(currentStatus.c_str());
         Serial << beginl << green << "MQTT Status: " << currentStatus << DI::endl;
